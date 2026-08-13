@@ -1,0 +1,55 @@
+name: Sync Upstream & Deploy
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/mtvpls/MoonTVPlus.git
+          git fetch upstream main
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          if git merge-base --is-ancestor HEAD upstream/main; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream updates, skip."
+          else
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream has new commits:"
+            git log --oneline HEAD..upstream/main | head -30
+          fi
+
+      - name: Merge upstream into fork
+        if: steps.check.outputs.updated == 'true'
+        run: |
+          git config user.name "sync-bot"
+          git config user.email "actions@github.com"
+          git merge upstream/main --no-edit
+          git push origin main
+
+      - name: Trigger Cloudflare deploy
+        if: steps.check.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run "Deploy to Cloudflare" --ref main
